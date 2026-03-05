@@ -24,6 +24,19 @@ variable "cloud-config" {}
 variable "elastic_apikey" {}
 variable "organization_id" {}
 
+terraform {
+  required_providers {
+    ec = {
+      source  = "elastic/ec"
+      version = "~> 0.10.0"
+    }
+    restapi = {
+      source  = "Mastercard/restapi"
+      version = "1.19.1"
+    }
+  }
+}
+
 provider "azurerm" {
   features {}
 
