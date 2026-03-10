@@ -25,10 +25,6 @@ variable "organization_id" {}
 
 terraform {
   required_providers {
-    ec = {
-      source  = "elastic/ec"
-      version = "0.12.4"
-    }
     restapi = {
       source  = "Mastercard/restapi"
       version = "1.19.1"
@@ -67,10 +63,6 @@ provider "azurerm" {
   client_secret   = var.client_secret
   tenant_id       = var.tenant_id
   subscription_id = var.subscription_id
-}
-
-provider "ec" {
-  apikey = var.elastic_apikey
 }
 
 provider "restapi" {
