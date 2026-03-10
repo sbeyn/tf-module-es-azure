@@ -1,5 +1,4 @@
 variable "public_key" {}
-variable "image" {}
 variable "disk" {}
 variable "instance_type" {}
 variable "name" {}
@@ -28,13 +27,37 @@ terraform {
   required_providers {
     ec = {
       source  = "elastic/ec"
-      version = "~> 0.10.0"
+      version = "0.12.4"
     }
     restapi = {
       source  = "Mastercard/restapi"
       version = "1.19.1"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 2.47.0"
+    }
   }
+}
+
+variable "elastic_privatelink_alias" {
+  description = "L'alias du service Private Link fourni par Elastic pour votre région"
+  default     = "westeurope-prod-001-privatelink-service.190cd496-6d79-4ee2-8f23-0667fd5a8ec1.westeurope.azure.privatelinkservice"
+}
+
+variable "elastic_dns_zone_name" {
+  description = "Le nom de la zone DNS (ex: privatelink.eastus2.azure.elastic-cloud.com)"
+  default     = "privatelink.westeurope.azure.elastic-cloud.com"
+}
+
+provider "azuread" {
+  client_id     = var.client_id
+  client_secret = var.client_secret
+  tenant_id     = var.tenant_id
 }
 
 provider "azurerm" {
@@ -61,12 +84,21 @@ provider "restapi" {
   }
 }
 
+locals {
+  create_user_viewer = "./create_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"
+  destroy_user_viewer = "./delete_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"  
+}
+
+data "azuread_domains" "default" {
+  only_default = true
+}
+
 resource "restapi_object" "student_api_key" {
   path         = "/users/auth/keys"
   query_string = ""
   data         = jsonencode({
     description = var.name
-    expiration  = "1h"
+    expiration  = "1d"
     role_assignments = {
       organization = [
         {
@@ -76,13 +108,39 @@ resource "restapi_object" "student_api_key" {
       ]
     }
   })
-  
+  destroy_path   = "/users/auth/keys/{id}" 
+  destroy_method = "DELETE"
+  lifecycle {
+    ignore_changes  = [api_response, data]
+  }
+
   id_attribute = "id" 
 }
 
 resource "azurerm_resource_group" "rg" {
   name     = "rg-${var.name}"
   location = var.region
+}
+
+resource "random_password" "hobbyfarm_user_password" {
+  length           = 16
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+resource "azuread_user" "hobbyfarm_user" {
+  user_principal_name = "${var.name}@${data.azuread_domains.default.domains[0].domain_name}"
+  display_name        = "Hobbyfarm Student ${var.name}"
+  password            = random_password.hobbyfarm_user_password.result
+  mail                = "${var.name}@maildrop.cc"
+  
+  force_password_change = false
+}
+
+resource "azurerm_role_assignment" "rg_owner" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Owner"
+  principal_id         = azuread_user.hobbyfarm_user.object_id
 }
 
 resource "azurerm_virtual_network" "hobbyfarm_network" {
@@ -97,6 +155,40 @@ resource "azurerm_subnet" "hobbyfarm_subnet" {
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.hobbyfarm_network.name
   address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_private_endpoint" "elastic_pe" {
+  name                 = "pe-elastic-${var.name}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  subnet_id           = azurerm_subnet.hobbyfarm_subnet.id
+
+  private_service_connection {
+    name                           = "psc-elastic-${var.name}"
+    private_connection_resource_alias = var.elastic_privatelink_alias
+    is_manual_connection           = true
+    request_message                = "Connexion depuis Hobbyfarm ${var.name}"
+  }
+}
+
+resource "azurerm_private_dns_zone" "elastic_dns" {
+  name                = var.elastic_dns_zone_name
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "elastic_dns_link" {
+  name                  = "vnet-link-elastic"
+  resource_group_name   = azurerm_resource_group.rg.name
+  private_dns_zone_name = azurerm_private_dns_zone.elastic_dns.name
+  virtual_network_id    = azurerm_virtual_network.hobbyfarm_network.id
+}
+
+resource "azurerm_private_dns_a_record" "elastic_wildcard" {
+  name                = "*"
+  zone_name           = azurerm_private_dns_zone.elastic_dns.name
+  resource_group_name = azurerm_resource_group.rg.name
+  ttl                 = 300
+  records             = [azurerm_private_endpoint.elastic_pe.private_service_connection[0].private_ip_address]
 }
 
 resource "azurerm_public_ip" "hobbyfarm_public_ip" {
@@ -182,22 +274,28 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
 
 }
 
-resource "ec_organization" "org" {
-  members = {
-    "${var.name}@maildrop.cc" = {
-      deployment_roles = [
-        {
-          role            = "viewer"
-          all_deployments = true
-        }
-      ]
-    }
+resource "null_resource" "lifecycle-elastic-member" {
+  triggers = {
+    destroy_user_viewer = local.destroy_user_viewer
+  }
+  provisioner "local-exec" {
+    when       = create
+    command    = local.create_user_viewer
+  }
+  provisioner "local-exec" {
+    when       = destroy
+    command    = self.triggers.destroy_user_viewer
+    on_failure = continue
   }
 }
 
-output "generated_ec_api_key" {
-  value     = jsondecode(restapi_object.student_api_key.api_response).key
+output "password_azure" {
+  value     = random_password.hobbyfarm_user_password.result
   sensitive = true
+}
+
+output "generated_ec_api_key" {
+  value     = try(jsondecode(restapi_object.student_api_key.api_response).key, "None")
 }
 
 output "private_ip" {
