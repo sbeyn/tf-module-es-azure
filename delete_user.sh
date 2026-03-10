@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 API_KEY=$1
 ORG_ID=$2
 EMAIL=$3
