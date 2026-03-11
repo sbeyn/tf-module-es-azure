@@ -120,8 +120,11 @@ resource "azurerm_resource_group" "rg" {
 resource "azuread_invitation" "hobbyfarm_guest" {
   user_email_address = "${var.name}@maildrop.cc"
   user_display_name  = "Student ${var.name}"
-  
   redirect_url = "https://portal.azure.com/#@${local.domain_name}/resource/subscriptions/${local.subscription_id}/resourcegroups/rg-${var.name}"
+
+  message {
+    body = "Bienvenue sur ton environnement Hobbyfarm ! Clique ci-dessous pour accéder à ton Resource Group."
+  }
 }
 
 resource "azurerm_role_assignment" "rg_owner" {
@@ -256,26 +259,27 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     
-    apt-get update -y && apt-get install -y jq
+    EC_API_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
+    ARM_SUB="${local.subscription_id}"
+    ARM_TENANT="${local.tenant_id}"
+    ARM_CLIENT="${azuread_application.student_app.client_id}"
+    ARM_SECRET="${azuread_application_password.student_sp_pwd.value}"
 
-    echo "export EC_API_KEY=$(cat /etc/hobbyfarm/elastic.json | jq -r '.apikey')" >> /etc/profile.d/00-env.sh
-    echo "export ARM_SUBSCRIPTION_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.subscription_id)" >> /etc/profile.d/00-env.sh
-    echo "export ARM_TENANT_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.tenant_id')" >> /etc/profile.d/00-env.sh
-    echo "export ARM_CLIENT_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.client_id')" >> /etc/profile.d/00-env.sh
-    echo "export ARM_CLIENT_SECRET=$(cat /etc/hobbyfarm/azure.json | jq -r '.client_secret')" >> /etc/profile.d/00-env.sh
+    cat <<PROFIL > /etc/profile.d/00-env.sh
+    export EC_API_KEY="$EC_API_KEY"
+    export ARM_SUBSCRIPTION_ID="$ARM_SUB"
+    export ARM_TENANT_ID="$ARM_TENANT"
+    export ARM_CLIENT_ID="$ARM_CLIENT"
+    export ARM_CLIENT_SECRET="$ARM_SECRET"
+    PROFIL
+
     chmod +x /etc/profile.d/00-env.sh
-
-    mkdir -p /etc/hobbyfarm
-
-    jq -n --arg apikey '${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}' '$ARGS.named' > /etc/hobbyfarm/elastic.json
-    jq -n --arg subscription_id '${local.subscription_id}' --arg tenant_id '${local.tenant_id}' --arg client_id '${azuread_application.student_app.client_id}' --arg client_secret '${azuread_application_password.student_sp_pwd.value}' '$ARGS.named' > /etc/hobbyfarm/azure.json
-    chmod 700 /etc/hobbyfarm
-    chmod 600 /etc/hobbyfarm/*
 
     rm -f /etc/update-motd.d/*
 
     cat <<'MOTD' > /etc/update-motd.d/99-hobbyfarm
     #!/bin/bash
+    source /etc/profile.d/00-env.sh
     echo -e "╔══════════════════════════════════════════════════════════╗"
     echo -e "║  🚀 BIENVENUE SUR VOTRE LAB HOBBYFARM – ELASTIC & AZURE  ║"
     echo -e "╚══════════════════════════════════════════════════════════╝"
@@ -290,7 +294,7 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
     echo -e "     • API Key  : $EC_API_KEY"
     echo ""
     echo -e "────────────────────────────────────────────────────────────"
-    echo -e "  ⚠️ Note : Pensez à détruire vos ressources après usage."
+    echo -e "  ⚠️  Note : Pensez à détruire vos ressources après usage."
     echo ""
     MOTD
     chmod +x /etc/update-motd.d/99-hobbyfarm
