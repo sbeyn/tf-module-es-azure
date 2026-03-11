@@ -88,10 +88,6 @@ locals {
   destroy_user_viewer = "./delete_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"  
 }
 
-data "azuread_domains" "default" {
-  only_default = true
-}
-
 resource "restapi_object" "student_api_key" {
   path         = "/users/auth/keys"
   query_string = ""
