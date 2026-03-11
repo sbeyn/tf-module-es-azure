@@ -281,7 +281,7 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
     #!/bin/bash
     source /etc/profile.d/00-env.sh
     echo -e "╔══════════════════════════════════════════════════════════╗"
-    echo -e "║  🚀 BIENVENUE SUR VOTRE LAB HOBBYFARM – ELASTIC & AZURE  ║"
+    echo -e "║  🚀  BIENVENUE SUR VOTRE LAB HOBBYFARM – ELASTIC & AZURE  ║"
     echo -e "╚══════════════════════════════════════════════════════════╝"
     echo ""
     echo -e "  🌐 ACCES AZURE SERVICE PRINCIPAL"
