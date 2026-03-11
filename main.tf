@@ -29,10 +29,6 @@ terraform {
       source  = "Mastercard/restapi"
       version = "1.19.1"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
     azuread = {
       source  = "hashicorp/azuread"
       version = "~> 2.47.0"
@@ -76,8 +72,19 @@ provider "restapi" {
   }
 }
 
+data "azurerm_client_config" "current" {}
+
+data "azurerm_subscription" "current" {}
+
+data "azuread_domains" "default" {
+  only_default = true
+}
+
 locals {
-  create_user_viewer = "./create_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"
+  domain_name         = data.azuread_domains.default.domains[0].domain_name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  subscription_id     = data.azurerm_subscription.current.subscription_id
+  create_user_viewer  = "./create_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"
   destroy_user_viewer = "./delete_user.sh ${var.elastic_apikey} ${var.organization_id} ${var.name}@maildrop.cc"  
 }
 
@@ -114,25 +121,45 @@ resource "azurerm_resource_group" "rg" {
   location = var.region
 }
 
-resource "random_password" "hobbyfarm_user_password" {
-  length           = 16
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
-}
-
-resource "azuread_user" "hobbyfarm_user" {
-  user_principal_name = "${var.name}@${data.azuread_domains.default.domains[0].domain_name}"
-  display_name        = "Hobbyfarm Student ${var.name}"
-  password            = random_password.hobbyfarm_user_password.result
-  mail                = "${var.name}@maildrop.cc"
+resource "azuread_invitation" "hobbyfarm_guest" {
+  user_email_address = "${var.name}@maildrop.cc"
+  user_display_name  = "Student ${var.name}"
   
-  force_password_change = false
+  redirect_url = "https://portal.azure.com/#@${local.domain_name}/resource/subscriptions/${local.subscription_id}/resourcegroups/rg-${var.name}"
+
+  message {
+    additional_languages {
+      code = "fr-FR"
+    }
+  }
 }
 
 resource "azurerm_role_assignment" "rg_owner" {
   scope                = azurerm_resource_group.rg.id
   role_definition_name = "Owner"
-  principal_id         = azuread_user.hobbyfarm_user.object_id
+  principal_id         = azuread_invitation.hobbyfarm_guest.user_id
+}
+
+resource "azuread_application" "student_app" {
+  display_name = "app-${var.name}"
+  owners       = [data.azurerm_client_config.current.object_id]
+}
+
+resource "azuread_service_principal" "student_sp" {
+  client_id                    = azuread_application.student_app.client_id
+  app_role_assignment_required = false
+  owners                       = [data.azurerm_client_config.current.object_id]
+}
+
+resource "azuread_application_password" "student_sp_pwd" {
+  application_id = azuread_application.student_app.id
+  display_name   = "secret-${var.name}"
+}
+
+resource "azurerm_role_assignment" "sp_owner" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Owner"
+  principal_id         = azuread_service_principal.student_sp.object_id
 }
 
 resource "azurerm_virtual_network" "hobbyfarm_network" {
@@ -197,13 +224,13 @@ resource "azurerm_network_security_group" "hobbyfarm_nsg" {
   resource_group_name = azurerm_resource_group.rg.name
 
   security_rule {
-    name                       = "SSH"
+    name                       = "Custom"
     priority                   = 1001
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "22"
+    destination_port_range     = "*"
     source_address_prefix      = var.source_address_prefix
     destination_address_prefix = "*"
   }
@@ -239,14 +266,19 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     
+    apt-get update -y && apt-get install -y jq
+
+    echo "export EC_API_KEY=$(cat /etc/hobbyfarm/elastic.json | jq -r '.apikey')" >> /etc/profile.d/00-env.sh
+    echo "export ARM_SUBSCRIPTION_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.subscription_id)" >> /etc/profile.d/00-env.sh
+    echo "export ARM_TENANT_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.tenant_id')" >> /etc/profile.d/00-env.sh
+    echo "export ARM_CLIENT_ID=$(cat /etc/hobbyfarm/azure.json | jq -r '.client_id')" >> /etc/profile.d/00-env.sh
+    echo "export ARM_CLIENT_SECRET=$(cat /etc/hobbyfarm/azure.json | jq -r '.client_secret')" >> /etc/profile.d/00-env.sh
+    chmod +x /etc/profile.d/00-env.sh
+
     mkdir -p /etc/hobbyfarm
-    
-    ELASTIC_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
-    AZ_LOGIN="${azuread_user.hobbyfarm_user.user_principal_name}"
-    AZ_PASS="${random_password.hobbyfarm_user_password.result}"
-    
-    echo "$ELASTIC_KEY" > /etc/hobbyfarm/elastic_api_key
-    echo "$AZ_PASS" > /etc/hobbyfarm/azure_password
+
+    jq -n --arg apikey '${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}' '$ARGS.named' > /etc/hobbyfarm/elastic.json
+    jq -n --arg subscription_id '${local.subscription_id}' --arg tenant_id '${local.tenant_id}' --arg client_id '${azuread_application.student_app.client_id}' --arg client_secret '${azuread_application_password.student_sp_pwd.value}' '$ARGS.named' > /etc/hobbyfarm/azure.json
     chmod 700 /etc/hobbyfarm
     chmod 600 /etc/hobbyfarm/*
 
@@ -254,22 +286,23 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
 
     cat <<'MOTD' > /etc/update-motd.d/99-hobbyfarm
     #!/bin/bash
-    echo -e "\e[1;34m##########################################################\e[0m"
-    echo -e "\e[1;34m#           BIENVENUE SUR TON LAB HOBBYFARM              #\e[0m"
-    echo -e "\e[1;34m##########################################################\e[0m"
+    echo -e "╔══════════════════════════════════════════════════════════╗"
+    echo -e "║  🚀 BIENVENUE SUR VOTRE LAB HOBBYFARM – ELASTIC & AZURE  ║"
+    echo -e "╚══════════════════════════════════════════════════════════╝"
     echo ""
-    echo -e "\e[1;32m--- ACCÈS AZURE ---\e[0m"
-    echo -e "Login    : ${AZ_LOGIN}"
-    echo -e "Password : ${AZ_PASS}"
+    echo -e "  🌐 ACCES AZURE SERVICE PRINCIPAL"
+    echo -e "     • Subscription ID : $ARM_SUBSCRIPTION_ID"
+    echo -e "     • Client ID       : $ARM_CLIENT_ID"
+    echo -e "     • Secret ID       : $ARM_CLIENT_SECRET"
+    echo -e "     • Tenant ID       : $ARM_TENANT_ID"
     echo ""
-    echo -e "\e[1;32m--- ACCÈS ELASTIC ---\e[0m"
-    echo -e "API Key  : ${ELASTIC_KEY}"
+    echo -e "  🔑 ACCES ELASTIC CLOUD"
+    echo -e "     • API Key  : $EC_API_KEY"
     echo ""
-    echo -e "\e[1;33mInfos utiles :\e[0m"
-    echo -e "Les credentials sont stockés dans /etc/hobbyfarm/"
-    echo -e "\e[1;34m##########################################################\e[0m"
+    echo -e "────────────────────────────────────────────────────────────"
+    echo -e "  ⚠️ Note : Pensez à détruire vos ressources après usage."
+    echo ""
     MOTD
-
     chmod +x /etc/update-motd.d/99-hobbyfarm
   EOF
   )
@@ -317,15 +350,6 @@ resource "null_resource" "lifecycle-elastic-member" {
     command    = self.triggers.destroy_user_viewer
     on_failure = continue
   }
-}
-
-output "password_azure" {
-  value     = random_password.hobbyfarm_user_password.result
-  sensitive = true
-}
-
-output "generated_ec_api_key" {
-  value     = try(jsondecode(restapi_object.student_api_key.api_response).key, "None")
 }
 
 output "private_ip" {
