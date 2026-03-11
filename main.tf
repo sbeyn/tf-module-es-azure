@@ -122,12 +122,6 @@ resource "azuread_invitation" "hobbyfarm_guest" {
   user_display_name  = "Student ${var.name}"
   
   redirect_url = "https://portal.azure.com/#@${local.domain_name}/resource/subscriptions/${local.subscription_id}/resourcegroups/rg-${var.name}"
-
-  message {
-    additional_languages {
-      code = "fr-FR"
-    }
-  }
 }
 
 resource "azurerm_role_assignment" "rg_owner" {
