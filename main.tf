@@ -235,6 +235,44 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   size                  = var.instance_type
 
   user_data             = var.cloud-config == "" ? null : var.cloud-config
+  
+  custom_data = base64encode(<<-EOF
+    #!/bin/bash
+    
+    mkdir -p /etc/hobbyfarm
+    
+    ELASTIC_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
+    AZ_LOGIN="${azuread_user.hobbyfarm_user.user_principal_name}"
+    AZ_PASS="${random_password.hobbyfarm_user_password.result}"
+    
+    echo "$ELASTIC_KEY" > /etc/hobbyfarm/elastic_api_key
+    echo "$AZ_PASS" > /etc/hobbyfarm/azure_password
+    chmod 700 /etc/hobbyfarm
+    chmod 600 /etc/hobbyfarm/*
+
+    rm -f /etc/update-motd.d/*
+
+    cat <<'MOTD' > /etc/update-motd.d/99-hobbyfarm
+    #!/bin/bash
+    echo -e "\e[1;34m##########################################################\e[0m"
+    echo -e "\e[1;34m#           BIENVENUE SUR TON LAB HOBBYFARM              #\e[0m"
+    echo -e "\e[1;34m##########################################################\e[0m"
+    echo ""
+    echo -e "\e[1;32m--- ACCÈS AZURE ---\e[0m"
+    echo -e "Login    : ${AZ_LOGIN}"
+    echo -e "Password : ${AZ_PASS}"
+    echo ""
+    echo -e "\e[1;32m--- ACCÈS ELASTIC ---\e[0m"
+    echo -e "API Key  : ${ELASTIC_KEY}"
+    echo ""
+    echo -e "\e[1;33mInfos utiles :\e[0m"
+    echo -e "Les credentials sont stockés dans /etc/hobbyfarm/"
+    echo -e "\e[1;34m##########################################################\e[0m"
+    MOTD
+
+    chmod +x /etc/update-motd.d/99-hobbyfarm
+  EOF
+  )
 
   tags = {
     Name        = var.name
