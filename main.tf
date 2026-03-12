@@ -36,16 +36,6 @@ terraform {
   }
 }
 
-variable "elastic_privatelink_alias" {
-  description = "L'alias du service Private Link fourni par Elastic pour votre région"
-  default     = "westeurope-prod-001-privatelink-service.190cd496-6d79-4ee2-8f23-0667fd5a8ec1.westeurope.azure.privatelinkservice"
-}
-
-variable "elastic_dns_zone_name" {
-  description = "Le nom de la zone DNS (ex: privatelink.eastus2.azure.elastic-cloud.com)"
-  default     = "privatelink.westeurope.azure.elastic-cloud.com"
-}
-
 provider "azuread" {
   client_id     = var.client_id
   client_secret = var.client_secret
@@ -169,40 +159,6 @@ resource "azurerm_subnet" "hobbyfarm_subnet" {
   address_prefixes     = ["10.0.1.0/24"]
 }
 
-resource "azurerm_private_endpoint" "elastic_pe" {
-  name                 = "pe-elastic-${var.name}"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  subnet_id           = azurerm_subnet.hobbyfarm_subnet.id
-
-  private_service_connection {
-    name                           = "psc-elastic-${var.name}"
-    private_connection_resource_alias = var.elastic_privatelink_alias
-    is_manual_connection           = true
-    request_message                = "Connexion depuis Hobbyfarm ${var.name}"
-  }
-}
-
-resource "azurerm_private_dns_zone" "elastic_dns" {
-  name                = var.elastic_dns_zone_name
-  resource_group_name = azurerm_resource_group.rg.name
-}
-
-resource "azurerm_private_dns_zone_virtual_network_link" "elastic_dns_link" {
-  name                  = "vnet-link-elastic"
-  resource_group_name   = azurerm_resource_group.rg.name
-  private_dns_zone_name = azurerm_private_dns_zone.elastic_dns.name
-  virtual_network_id    = azurerm_virtual_network.hobbyfarm_network.id
-}
-
-resource "azurerm_private_dns_a_record" "elastic_wildcard" {
-  name                = "*"
-  zone_name           = azurerm_private_dns_zone.elastic_dns.name
-  resource_group_name = azurerm_resource_group.rg.name
-  ttl                 = 300
-  records             = [azurerm_private_endpoint.elastic_pe.private_service_connection[0].private_ip_address]
-}
-
 resource "azurerm_public_ip" "hobbyfarm_public_ip" {
   name                = "pip-${var.name}"
   location            = azurerm_resource_group.rg.location
@@ -259,6 +215,10 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     
+    wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install terraform
+
     EC_API_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
     ARM_SUB="${local.subscription_id}"
     ARM_TENANT="${local.tenant_id}"
