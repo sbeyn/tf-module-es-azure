@@ -215,8 +215,6 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   custom_data = base64encode(<<-EOF
     #!/bin/bash
 
-    curl -sSL https://raw.githubusercontent.com/sbeyn/es-course-img/refs/heads/main/setup.sh | bash -s
-
     EC_API_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
     ARM_SUB="${local.subscription_id}"
     ARM_TENANT="${local.tenant_id}"
@@ -256,6 +254,7 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
     echo ""
     MOTD
     chmod +x /etc/update-motd.d/99-hobbyfarm
+    curl -sSL https://raw.githubusercontent.com/sbeyn/es-course-img/refs/heads/main/setup.sh | bash -s
   EOF
   )
 
