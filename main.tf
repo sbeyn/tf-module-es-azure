@@ -254,7 +254,7 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   network_interface_ids = [azurerm_network_interface.hobbyfarm_nic.id]
   size                  = var.instance_type
 
-  user_data             = var.cloud-config == "" ? null : var.cloud-config
+  user_data             = var.cloud-config == "" ? null : base64encode(var.cloud-config)
   
   custom_data = base64encode(<<-EOF
     #!/bin/bash
