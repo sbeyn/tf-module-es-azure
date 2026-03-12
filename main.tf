@@ -255,6 +255,10 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
     MOTD
     chmod +x /etc/update-motd.d/99-hobbyfarm
     curl -sSL https://raw.githubusercontent.com/sbeyn/es-course-img/refs/heads/main/setup.sh | bash -s
+    curl -fsSL https://code-server.dev/install.sh > codeServerInstall.sh
+    /bin/sh codeServerInstall.sh && systemctl enable --now code-server@root
+    sleep 5 && sed -i.bak 's/auth: password/auth: none/' ~/.config/code-server/config.yaml
+    systemctl restart code-server@root
   EOF
   )
 
