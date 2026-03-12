@@ -214,10 +214,6 @@ resource "azurerm_linux_virtual_machine" "hobbyfarm_vm" {
   
   custom_data = base64encode(<<-EOF
     #!/bin/bash
-    
-    wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-sudo apt update && sudo apt install terraform
 
     EC_API_KEY="${try(jsondecode(restapi_object.student_api_key.api_response).key, "N/A")}"
     ARM_SUB="${local.subscription_id}"
